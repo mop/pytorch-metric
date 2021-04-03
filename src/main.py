@@ -207,6 +207,9 @@ def main():
         scores.append(acc)
         logging.info(f'Accuracy: {acc} in epoch: {e}')
 
+        # step the scheduler if accuracy does not increase.
+        scheduler.step(acc)
+
 
     
 if __name__ == '__main__':
