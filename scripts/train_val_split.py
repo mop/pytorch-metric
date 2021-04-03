@@ -9,7 +9,7 @@ def main():
     parser.add_argument('--csv-file', default='/home/nax/Downloads/shopee-product-matching/train.csv')
     parser.add_argument('--seed', default=42)
     parser.add_argument('--output', default='/home/nax/Downloads/shopee-product-matching/train_labels.csv')
-    parser.add_argument('--train-fraction', type=float, default=0.5)
+    parser.add_argument('--train-fraction', type=float, default=0.9)
 
     args = parser.parse_args()
     df = pd.read_csv(args.csv_file)

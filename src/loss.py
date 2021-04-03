@@ -1,5 +1,6 @@
 import torch
 import sklearn
+import torch.nn.functional as F
 
 def pairwise_distance(a: torch.Tensor, squared=False) -> torch.Tensor:
     pw_dist_sq = torch.add(
@@ -11,26 +12,26 @@ def pairwise_distance(a: torch.Tensor, squared=False) -> torch.Tensor:
 
     pw_dist_sq = torch.clamp(pw_dist_sq, min=0.0)
 
-    invald = torch.le(pw_dist_sq, 0.0)
+    invalid = torch.le(pw_dist_sq, 0.0)
 
     if squared:
         pw_dists = pw_dist_sq
     else:
         pw_dists = torch.sqrt(pw_dist_sq + invalid.float() * 1e-16)
 
-    off_diags = 1 - torch.eye(pw_dists.size(), device=pw_dists.device())
+    off_diags = 1 - torch.eye(*pw_dists.size(), device=pw_dists.device)
     pw_dists = torch.mul(pw_dists, off_diags)
 
     return pw_dists
 
 
-def binarize_and_smooth_labels(T, num_classes, smoothing_cost=0):
+def binarize_and_smooth_labels(T, num_classes, smooth_const=0):
     import sklearn.preprocessing
     T = T.cpu().numpy()
     T = sklearn.preprocessing.label_binarize(
         T, classes=range(0, num_classes))
     T = T * (1 - smooth_const)
-    T[T == 0] = smoothing_cost / (num_classes - 1)
+    T[T == 0] = smooth_const / (num_classes - 1)
     T = torch.FloatTensor(T).cuda()
 
     return T

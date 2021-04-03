@@ -10,6 +10,8 @@ import time
 import eval_utils
 import logging
 import random
+import os
+import torch.utils.tensorboard as tensorboard
 
 
 def main():
@@ -21,12 +23,14 @@ def main():
     parser.add_argument('--batch-size', type=int)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--warmup_k', type=int)
+    parser.add_argument('--freeze-batchnorm', action='store_true')
     parser.add_argument('--samples-per-class', type=int, default=2)
     parser.add_argument('--apex', action='store_true')
     parser.add_argument('--lr-steps', nargs='+', type=int)
     parser.add_argument('--mode', default='train', choices=('train', 'trainval', 'test'))
     parser.add_argument('--log-filename', default='example')
     parser.add_argument('--config', default='configs/baseline.py')
+    parser.add_argument('--output', default='experiments/baseline')
 
     args = parser.parse_args()
 
@@ -63,7 +67,13 @@ def main():
             collate_fn=dataset.collate_fn)
 
     val_labels = data.get_val_labels(args.dataset, set(train_labels))
+    val_labels = list(val_labels)
     val_dataset = data.DMLDataset(args.dataset, is_training=False, subset_labels=val_labels)
+    val_loader = data_util.DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            collate_fn=val_dataset.collate_fn
+    )
 
     print(f'# samples {len(dataset)}')
 
@@ -74,14 +84,22 @@ def main():
 
     emb = torch.nn.Linear(in_size, args.embedding_size)
     model = torch.nn.Sequential(backbone, emb)
+    model.train()
+
+    def set_bn_eval(m):
+        if m.__class__.__name__.find('BatchNorm') != -1:
+            m.eval()
+    if args.freeze_batchnorm:
+        model.apply(set_bn_eval)
+
 
     if not args.apex:
         model = torch.nn.DataParallel(model)
-    #model = model.cuda()
+    model = model.cuda()
 
-    loss = util.get_class_fn(config['criterion'])(
+    criterion = util.get_class_fn(config['criterion'])(
         embedding_size=args.embedding_size,
-        num_classes=dataset.num_classes)#.cuda()
+        num_classes=dataset.num_classes).cuda()
 
     opt_warmup = util.get_class(config['opt']['type'])([
         {
@@ -95,7 +113,7 @@ def main():
             **config['opt']['args']['embedding']
         },
         {
-            **{'params': list(loss.parameters())
+            **{'params': list(criterion.parameters())
             },
             **config['opt']['args']['proxynca']
         },
@@ -113,18 +131,24 @@ def main():
             **config['opt']['args']['embedding']
         },
         {
-            **{'params': list(loss.parameters())
+            **{'params': list(criterion.parameters())
             },
             **config['opt']['args']['proxynca']
         },
     ], **config['opt']['args']['base'])
 
     if args.apex:
-        (model, loss), (opt, opt_warmup) = amp.initialize((model, criterion), (opt, opt_warmup), opt_level='O1')
+        (model, criterion), (opt, opt_warmup) = amp.initialize((model, criterion), (opt, opt_warmup), opt_level='O1')
         model = torch.nn.DataParallel(model)
 
     scheduler = util.get_class(config['lr_scheduler']['type'])(
         opt, **config['lr_scheduler']['args'])
+
+    if not os.path.exists('log'):
+        os.makedirs('log')
+
+    if not os.path.exists(args.output):
+        os.makedirs(args.output)
 
     logging.basicConfig(
         format='%(asctime)s %(message)s',
@@ -167,6 +191,9 @@ def main():
     lr_steps = []
     it = 0
 
+    prev_lr = 0
+    writer = tensorboard.SummaryWriter(args.output)
+    best_acc = 0
     for e in range(args.epochs):
         curr_lr = opt.param_groups[0]['lr']
         print(prev_lr, curr_lr)
@@ -176,7 +203,6 @@ def main():
 
         tic_per_epoch = time.time()
         losses_per_epoch = []
-        tnmi = []
 
         for batch in loader:
             imgs, text, labels = batch['image'], batch['text'], batch['label']
@@ -192,20 +218,51 @@ def main():
                     scaled_loss.backward()
             else:
                 loss.backward()
+            first_param = list(model.parameters())[0]
+            print(first_param.size(), np.linalg.norm(first_param.grad.cpu().numpy()))
 
             torch.nn.utils.clip_grad_value_(model.parameters(), 10)
             losses_per_epoch.append(loss.data.detach().cpu().numpy())
+            print(losses_per_epoch[-1])
 
             opt.step()
-            opt.zero_grad()
 
         toc_per_epoch = time.time()
+        print(opt)
         logging.info(f'epoch: {e} in {toc_per_epoch - tic_per_epoch}')
 
         losses.append(np.mean(losses_per_epoch))
-        acc = eval_utils.evaluate(model, val_dataset)
+
+        tic_val = time.time()
+        acc = eval_utils.evaluate(model, val_loader)
+        toc_val = time.time()
+
+        if args.freeze_batchnorm:
+            model.apply(set_bn_eval)
+
+        if acc > best_acc:
+            logging.info('found new best accuracy, saving model...')
+            best_acc = acc
+            torch.save({
+                'epoch': e,
+                'state_dict': model.state_dict(), 
+                'accuracy': best_acc,
+                'optimizer': opt.state_dict(),
+                'amp': amp.state_dict() if args.apex else None
+            }, os.path.join(args.output, f'model_best_epoch_{e}.pth'))
+
         scores.append(acc)
-        logging.info(f'Accuracy: {acc} in epoch: {e}')
+        scheduler.step(acc)
+        
+        logging.info(f'Accuracy: {acc} in epoch: {e}, loss: {losses[-1]}, val_time: {toc_val - tic_val}')
+        writer.add_scalar('loss_train', losses[-1], e)
+        writer.add_scalar('val_accuracy', scores[-1], e)
+        writer.add_scalar('train_time', toc_per_epoch - tic_per_epoch, e)
+        writer.add_scalar('val_time', toc_val - tic_val, e)
+        writer.add_scalar('learning_rate', lr_steps[-1], e)
+
+        writer.flush()
+    writer.close()
 
         # step the scheduler if accuracy does not increase.
         scheduler.step(acc)
