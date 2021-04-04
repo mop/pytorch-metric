@@ -36,7 +36,10 @@ class DMLDataset(data.Dataset):
 
         self.df = pd.read_csv(csv_path)
 
-        labels = self.df['label_group'].unique()
+        if not self.is_testing:
+            labels = self.df['label_group'].unique()
+        else:
+            labels = []
         if self.subset_labels is not None:
             self.subset_labels = set(self.subset_labels)
             self.num_classes = len(self.subset_labels)
@@ -46,16 +49,26 @@ class DMLDataset(data.Dataset):
         self.files = []
         self.labels = []
         self.texts = []
-        i = 0
-        for lbl in labels:
-            if self.subset_labels is not None and lbl not in self.subset_labels:
-                continue
-            relevant = self.df[self.df['label_group'] == lbl]
-            self.labels += [i] * len(relevant)
-            self.files += list(relevant['image'])
-            self.texts += list(relevant['title'])
-            i += 1
-        self.labels = np.asarray(self.labels)
+        self.posting_ids = []
+        if not self.is_testing:
+            i = 0
+            for lbl in labels:
+                if self.subset_labels is not None and lbl not in self.subset_labels:
+                    continue
+                relevant = self.df[self.df['label_group'] == lbl]
+                self.labels += [i] * len(relevant)
+                self.files += list(relevant['image'])
+                self.texts += list(relevant['title'])
+                self.posting_ids += list(relevant['posting_id'])
+                i += 1
+            self.labels = np.asarray(self.labels)
+        else:
+            for i in range(len(self.df)):
+                self.posting_ids.append(self.df['posting_id'].iloc[i])
+                self.files.append(self.df['image'].iloc[i])
+                self.texts.append(self.df['title'].iloc[i])
+                self.labels.append(-1)
+            self.labels = np.asarray(self.labels)
 
         self.root = os.path.dirname(self.csv_path) + '/train_images/'
         if self.is_testing:
@@ -89,12 +102,15 @@ class DMLDataset(data.Dataset):
         images = torch.zeros((len(elements), 3, self.image_size, self.image_size), dtype=torch.float32)
         labels = torch.zeros((len(elements),), dtype=torch.int64)
         text = []
+        posting_ids = []
 
         for i in range(len(elements)):
             images[i, ...] = self.tform(elements[i]['image'])
             text.append(elements[i]['text'])
-            labels[i] = int(elements[i]['label'])
-        return { 'image': images, 'text': text, 'label': labels }
+            posting_ids.append(elements[i]['posting_id'])
+            if not self.is_testing:
+                labels[i] = int(elements[i]['label'])
+        return { 'image': images, 'text': text, 'label': labels, 'posting_id': posting_ids }
 
     def __len__(self):
         return len(self.labels)
@@ -109,6 +125,7 @@ class DMLDataset(data.Dataset):
         return {
             'image': img,
             'text': self.texts[item],
+            'posting_id': self.posting_ids[item],
             'label': self.labels[item]
         }
 
