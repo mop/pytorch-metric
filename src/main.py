@@ -88,6 +88,7 @@ def main():
 
     def set_bn_eval(m):
         if m.__class__.__name__.find('BatchNorm') != -1:
+            print('set bn eval...')
             m.eval()
     if args.freeze_batchnorm:
         model.apply(set_bn_eval)
@@ -219,11 +220,11 @@ def main():
             else:
                 loss.backward()
             first_param = list(model.parameters())[0]
-            print(first_param.size(), np.linalg.norm(first_param.grad.cpu().numpy()))
+            #print(first_param.size(), np.linalg.norm(first_param.grad.cpu().numpy()))
 
             torch.nn.utils.clip_grad_value_(model.parameters(), 10)
             losses_per_epoch.append(loss.data.detach().cpu().numpy())
-            print(losses_per_epoch[-1])
+            #print(losses_per_epoch[-1])
 
             opt.step()
 
