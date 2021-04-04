@@ -6,10 +6,10 @@ import torch.nn.functional as F
 
 
 class Extractor(nn.Module):
-    def __init__(self, model='resnet50', pool='max', use_lnorm=True):
+    def __init__(self, model='resnet50', pool='max', use_lnorm=True, pretrained=True):
         super().__init__()
 
-        self.base = models.__dict__[model](pretrained=True)
+        self.base = models.__dict__[model](pretrained=pretrained)
         if pool == 'avg':
             self.pool = nn.AdaptiveAvgPool2d((1, 1))
         elif pool == 'max':
