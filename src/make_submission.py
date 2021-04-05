@@ -16,16 +16,13 @@ def main():
     parser.add_argument('--apex', action='store_true')
     parser.add_argument('--embedding-size', type=int)
     parser.add_argument('--batch-size', type=int)
+    parser.add_argument('--image-size', type=int)
 
     args = parser.parse_args()
     threshold = 0.9075778192639249
 
     config = util.load_config(args.config)
-
-    if args.embedding_size is None:
-        args.embedding_size = config['embedding_size']
-    if args.batch_size is None:
-        args.batch_size = config['batch_size']
+    util.update_args(args, config)
 
     if args.apex:
         from apex import amp

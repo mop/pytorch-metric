@@ -20,6 +20,7 @@ config = {
     'epochs': 40*2,
     'batch_size': 128,
     'embedding_size': 2048,
+    'image_size': 224,
     'samples_per_class': 2,
     'num_gradcum': 1,
     'warmup_k': 5,

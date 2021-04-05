@@ -23,6 +23,7 @@ def main():
     parser.add_argument('--batch-size', type=int)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--warmup_k', type=int)
+    parser.add_argument('--image-size', type=int)
     parser.add_argument('--freeze-batchnorm', action='store_true')
     parser.add_argument('--samples-per-class', type=int, default=2)
     parser.add_argument('--apex', action='store_true')
@@ -38,13 +39,7 @@ def main():
         from apex import amp
 
     config = util.load_config(args.config)
-
-    if args.embedding_size is None:
-        args.embedding_size = config['embedding_size']
-    if args.batch_size is None:
-        args.batch_size = config['batch_size']
-    if args.epochs is None:
-        args.epochs = config['epochs']
+    util.update_args(args, config, additional_keys=('epochs',))
 
     if args.warmup_k is None:
         args.warmup_k = config['warmup_k']
@@ -55,7 +50,7 @@ def main():
     torch.cuda.manual_seed(args.seed)
 
     train_labels = np.loadtxt(args.label_split, dtype=np.int64)
-    dataset = data.DMLDataset(args.dataset, subset_labels=train_labels)
+    dataset = data.DMLDataset(args.dataset, image_size=args.image_size, subset_labels=train_labels)
     sampler = data.BalancedBatchSampler(
             batch_size=args.batch_size, 
             dataset=dataset,
@@ -68,7 +63,11 @@ def main():
 
     val_labels = data.get_val_labels(args.dataset, set(train_labels))
     val_labels = list(val_labels)
-    val_dataset = data.DMLDataset(args.dataset, is_training=False, subset_labels=val_labels)
+    val_dataset = data.DMLDataset(
+            args.dataset, 
+            image_size=args.image_size,
+            is_training=False,
+            subset_labels=val_labels)
     val_loader = data_util.DataLoader(
             val_dataset,
             batch_size=args.batch_size,
@@ -79,7 +78,7 @@ def main():
 
     backbone = util.get_class_fn(config['model'])()
     backbone.eval()
-    in_size = backbone(torch.rand(1, 3, 224, 224)).squeeze().size(0)
+    in_size = backbone(torch.rand(1, 3, args.image_size, args.image_size)).squeeze().size(0)
     backbone.train()
 
     emb = torch.nn.Linear(in_size, args.embedding_size)

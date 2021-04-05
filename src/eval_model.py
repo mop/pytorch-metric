@@ -17,15 +17,13 @@ def main():
     parser.add_argument('--apex', action='store_true')
     parser.add_argument('--embedding-size', type=int)
     parser.add_argument('--batch-size', type=int)
+    parser.add_argument('--image-size', type=int)
 
     args = parser.parse_args()
 
     config = util.load_config(args.config)
 
-    if args.embedding_size is None:
-        args.embedding_size = config['embedding_size']
-    if args.batch_size is None:
-        args.batch_size = config['batch_size']
+    util.update_args(args, config)
 
     if args.apex:
         from apex import amp
@@ -33,7 +31,10 @@ def main():
     train_labels = np.loadtxt(args.train_label_split, dtype=np.int64)
     val_labels = data.get_val_labels(args.dataset, set(train_labels))
     val_labels = list(val_labels)
-    val_dataset = data.DMLDataset(args.dataset, is_training=False, subset_labels=val_labels)
+    val_dataset = data.DMLDataset(args.dataset, 
+            image_size=args.image_size,
+            is_training=False,
+            subset_labels=val_labels)
     val_loader = data_util.DataLoader(
             val_dataset,
             batch_size=args.batch_size,
@@ -42,7 +43,7 @@ def main():
 
     backbone = util.get_class_fn(config['model'])()
     backbone.eval()
-    in_size = backbone(torch.rand(1, 3, 224, 224)).squeeze().size(0)
+    in_size = backbone(torch.rand(1, 3, args.image_size, args.image_size)).squeeze().size(0)
     backbone.train()
 
     emb = torch.nn.Linear(in_size, args.embedding_size)
