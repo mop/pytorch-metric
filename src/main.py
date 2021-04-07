@@ -11,7 +11,9 @@ import eval_utils
 import logging
 import random
 import os
+import model_loader
 import torch.utils.tensorboard as tensorboard
+from model import EmbeddingPredictor
 
 
 def main():
@@ -78,11 +80,27 @@ def main():
 
     backbone = util.get_class_fn(config['model'])()
     backbone.eval()
-    in_size = backbone(torch.rand(1, 3, args.image_size, args.image_size)).squeeze().size(0)
+    num_learners = 1
+    in_sizes = []
+    if config['is_ensemble']:
+        tmp = backbone(torch.rand(1, 3, args.image_size, args.image_size))
+        num_learners = len(tmp)
+        for i in range(num_learners):
+            in_sizes.append(tmp[i].squeeze().size(0))
+        in_size = in_sizes[0]
+    else:
+        in_size = backbone(torch.rand(1, 3, args.image_size, args.image_size)).squeeze().size(0)
+        in_sizes.append(in_size)
+        
     backbone.train()
 
-    emb = torch.nn.Linear(in_size, args.embedding_size)
-    model = torch.nn.Sequential(backbone, emb)
+    embeddings = []
+    for i in range(num_learners):
+        emb = torch.nn.Linear(in_sizes[i], args.embedding_size)
+        emb.cuda()
+        embeddings.append(emb)
+
+    model = EmbeddingPredictor(backbone, embeddings)
     model.train()
 
     def set_bn_eval(m):
@@ -92,14 +110,16 @@ def main():
     if args.freeze_batchnorm:
         model.apply(set_bn_eval)
 
-
     if not args.apex:
         model = torch.nn.DataParallel(model)
     model = model.cuda()
 
-    criterion = util.get_class_fn(config['criterion'])(
-        embedding_size=args.embedding_size,
-        num_classes=dataset.num_classes).cuda()
+    criterion_list = []
+    for i in range(num_learners):
+        criterion = util.get_class_fn(config['criterion'])(
+            embedding_size=args.embedding_size,
+            num_classes=dataset.num_classes).cuda()
+        criterion_list.append(criterion)
 
     opt_warmup = util.get_class(config['opt']['type'])([
         {
@@ -108,12 +128,12 @@ def main():
             'lr': 0
         },
         {
-            **{'params': list(emb.parameters())
+            **{'params': sum([list(emb.parameters()) for emb in embeddings], [])
             },
             **config['opt']['args']['embedding']
         },
         {
-            **{'params': list(criterion.parameters())
+            **{'params': sum([list(c.parameters()) for c in criterion_list], [])
             },
             **config['opt']['args']['proxynca']
         },
@@ -126,19 +146,19 @@ def main():
             **config['opt']['args']['backbone']
         },
         {
-            **{'params': list(emb.parameters())
+            **{'params': sum([list(emb.parameters()) for emb in embeddings], [])
             },
             **config['opt']['args']['embedding']
         },
         {
-            **{'params': list(criterion.parameters())
+            **{'params': sum([list(c.parameters()) for c in criterion_list], [])
             },
             **config['opt']['args']['proxynca']
         },
     ], **config['opt']['args']['base'])
 
     if args.apex:
-        (model, criterion), (opt, opt_warmup) = amp.initialize((model, criterion), (opt, opt_warmup), opt_level='O1')
+        (model, *criterion_list), (opt, opt_warmup) = amp.initialize([model] + criterion_list, (opt, opt_warmup), opt_level='O1')
         model = torch.nn.DataParallel(model)
 
     scheduler = util.get_class(config['lr_scheduler']['type'])(
@@ -172,8 +192,10 @@ def main():
             labels = batch['label']
 
             opt_warmup.zero_grad()
-            m = model(imgs.cuda())
-            loss = criterion(m, labels.cuda())
+            ms = model(imgs.cuda())
+            loss = 0
+            for m, criterion in zip(ms, criterion_list):
+                loss += criterion(m, labels.cuda())
 
             if args.apex:
                 with amp.scale_loss(loss, opt_warmup) as scaled_loss:
@@ -209,9 +231,11 @@ def main():
 
             opt.zero_grad()
             it += 1
-            m = model(imgs.cuda())
+            ms = model(imgs.cuda())
 
-            loss = criterion(m, labels.cuda())
+            loss = 0
+            for m, criterion in zip(ms, criterion_list):
+                loss += criterion(m, labels.cuda())
 
             if args.apex:
                 with amp.scale_loss(loss, opt) as scaled_loss:

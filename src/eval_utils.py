@@ -3,11 +3,15 @@ import torch
 import data
 from scipy.spatial.distance import cdist
 
-def evaluate(model: torch.nn.Module, dataset: data.DMLDataset) -> float:
+
+def extract_features(model: torch.nn.Module, dataset: data.DMLDataset) -> (np.ndarray, np.ndarray):
     """
-    Returns R@1 accuracy of the given model on the given dataset.
+    Extracts all feature vectors from the dataset with the model.
+
+    :model: Is a torch embedding ensemble model
+    :dataset: stores the dataset
+    :returns: Returns a tuple of (feature_vectors, labels)
     """
-    
     model_is_training = model.training
     model.eval()
 
@@ -15,12 +19,33 @@ def evaluate(model: torch.nn.Module, dataset: data.DMLDataset) -> float:
     all_fvecs = []
     for batch in dataset:
         img, txt, label = batch['image'], batch['text'], batch['label']
-        all_fvecs.append(model(img.cuda()).cpu().detach().numpy())
+        fvecs = [f.cpu().detach().numpy() for f in model(img.cuda())]
+        tmp = []
+        weights = [3, 1, 2]
+        for w, f in zip(weights, fvecs):
+            f = (w * f) / np.maximum(1e-5, np.linalg.norm(f, axis=-1, keepdims=True))
+            tmp.append(f)
+        #__import__('pdb').set_trace()
+        fvecs = np.concatenate(tmp, axis=1)
+        all_fvecs.append(fvecs)
         all_labels.append(label.cpu().detach().numpy())
 
     all_labels = np.concatenate(all_labels)
     fvecs = np.vstack(all_fvecs)
     fvecs = fvecs / np.maximum(1e-5, np.linalg.norm(fvecs, axis=-1, keepdims=True))
+
+    model.train()
+    model.train(model_is_training)
+
+    return fvecs, all_labels
+
+
+def evaluate(model: torch.nn.Module, dataset: data.DMLDataset) -> float:
+    """
+    Returns R@1 accuracy of the given model on the given dataset.
+    """
+    
+    fvecs, all_labels = extract_features(model, dataset)
 
     D = cdist(fvecs, fvecs)
     D += np.eye(D.shape[0]) * 1000
@@ -28,11 +53,8 @@ def evaluate(model: torch.nn.Module, dataset: data.DMLDataset) -> float:
     print(D.shape, fvecs.shape, all_labels.shape)
     print(preds.shape)
 
-    model.train()
-    model.train(model_is_training)
-
     return np.mean(preds == all_labels.ravel())
-    
+
 
 def f1_evaluate(model: torch.nn.Module,
                 dataset: data.DMLDataset,
@@ -47,27 +69,12 @@ def f1_evaluate(model: torch.nn.Module,
                 10 thresholds from 0 to the max distance
     :returns: A tuple of (threshold, f1_score)
     """
-    model_is_training = model.training
-    model.eval()
-
-    all_labels = []
-    all_fvecs = []
-    for batch in dataset:
-        img, txt, label = batch['image'], batch['text'], batch['label']
-        all_fvecs.append(model(img.cuda()).cpu().detach().numpy())
-        all_labels.append(label.cpu().detach().numpy())
-
-    all_labels = np.concatenate(all_labels)
-    fvecs = np.vstack(all_fvecs)
-    fvecs = fvecs / np.maximum(1e-5, np.linalg.norm(fvecs, axis=-1, keepdims=True))
+    fvecs, all_labels = extract_features(model, dataset)
 
     D = cdist(fvecs, fvecs)
     #D += np.eye(D.shape[0]) * 1000
 
     # reset model to training
-    model.train()
-    model.train(model_is_training)
-
     thresholds = [threshold] if threshold is not None else np.linspace(0, D.max(), 10)
     label_counts = np.bincount(all_labels)
 

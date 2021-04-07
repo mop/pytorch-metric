@@ -21,6 +21,7 @@ config = {
     'batch_size': 128,
     'embedding_size': 2048,
     'image_size': 224,
+    'is_ensemble': False,
     'samples_per_class': 2,
     'num_gradcum': 1,
     'warmup_k': 5,

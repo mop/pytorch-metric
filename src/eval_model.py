@@ -4,8 +4,10 @@ import argparse
 import util
 import data
 import model
+from model import EmbeddingPredictor
 import torch.utils.data as data_util
 import eval_utils
+import model_loader
 
 
 def main():
@@ -40,14 +42,8 @@ def main():
             batch_size=args.batch_size,
             collate_fn=val_dataset.collate_fn
     )
+    backbone, embeddings, model, states = model_loader.load_model(config, args, args.model)
 
-    backbone = util.get_class_fn(config['model'])()
-    backbone.eval()
-    in_size = backbone(torch.rand(1, 3, args.image_size, args.image_size)).squeeze().size(0)
-    backbone.train()
-
-    emb = torch.nn.Linear(in_size, args.embedding_size)
-    model = torch.nn.Sequential(backbone, emb)
     model.eval()
 
     if not args.apex:
@@ -58,9 +54,6 @@ def main():
         model = amp.initialize(model, opt_level='O1')
         model = torch.nn.DataParallel(model)
 
-
-    states = torch.load(args.model)
-    model.load_state_dict(states['state_dict'])
     if args.apex:
         amp.load_state_dict(states['amp'])
 
