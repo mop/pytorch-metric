@@ -39,6 +39,73 @@ class Extractor(nn.Module):
         return x
 
 
+class AttentionExtractor(nn.Module):
+    def __init__(self, model='resnet50', pool='avg', use_lnorm=True, pretrained=True):
+        super().__init__()
+
+        self.attention = CBAMAttention()
+
+        self.base = models.__dict__[model](pretrained=pretrained)
+        if pool == 'avg':
+            self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        elif pool == 'max':
+            self.pool = nn.AdaptiveMaxPool2d((1, 1))
+
+        self.lnorm = None
+        if use_lnorm:
+            self.lnorm = nn.LayerNorm(2048, elementwise_affine=False).cuda()
+
+    def forward(self, x):
+        x = self.base.conv1(x)
+        x = self.base.bn1(x)
+        x = self.base.relu(x)
+        x = self.base.maxpool(x)
+
+        x = self.base.layer1(x)
+        x = self.base.layer2(x)
+        x = self.base.layer3(x)
+        x = self.base.layer4(x)
+
+        x = self.attention(x)
+        x = self.pool(x)
+        x = x.reshape(x.size(0), -1)
+
+        if self.lnorm != None:
+            x = self.lnorm(x)
+
+        return x
+
+
+class CBAMAttention(nn.Module):
+    def __init__(self, channels_in=2048, rate=4):
+        super().__init__()
+        self.channels_in = channels_in
+        self.rate = rate
+
+        self.channel_attention1 = nn.Linear(self.channels_in, self.channels_in // self.rate)
+        self.channel_relu = nn.ReLU()
+        self.channel_attention2 = nn.Linear(self.channels_in // self.rate, self.channels_in)
+
+        self.channel_spatial = nn.Conv2d(2, 1, 7, padding=(3, 3))
+
+    def forward(self, x):
+        red_mean = torch.mean(x, dim=(2,3))
+        red_max = torch.amax(x, dim=(2,3))
+        exc1 = self.channel_attention2(self.channel_relu(self.channel_attention1(red_mean)))
+        exc2 = self.channel_attention2(self.channel_relu(self.channel_attention1(red_max)))
+        exc = torch.sigmoid(exc1 + exc2)
+
+        att1 = exc[:, :, None, None] * x
+
+        feat1 = torch.mean(att1, dim=1, keepdim=True)
+        feat2 = torch.amax(att1, dim=1, keepdim=True)
+        feat = torch.cat((feat1, feat2), axis=1)
+
+        att_chan = torch.sigmoid(self.channel_spatial(feat))
+        return att1 * att_chan
+        
+
+
 class EmbeddingPredictor(nn.Module):
     def __init__(self, bases, embeddings):
         super().__init__()
