@@ -39,6 +39,7 @@ class Extractor(nn.Module):
         return x
 
 
+
 class AttentionExtractor(nn.Module):
     def __init__(self, model='resnet50', pool='avg', use_lnorm=True, pretrained=True):
         super().__init__()
@@ -127,6 +128,25 @@ class EmbeddingPredictor(nn.Module):
         return results
 
 
+class SimSiamEmbeddingPredictor(EmbeddingPredictor):
+    def __init__(self, bases, embeddings, sim_siam):
+        super().__init__(bases, embeddings)
+        self.sim_siam = sim_siam
+
+    def forward(self, x):
+        fvecs = self.bases(x)
+
+        if not isinstance(fvecs, list) and not isinstance(fvecs, tuple):
+            fvecs = [fvecs]
+
+        results = []
+        for fvec, emb in zip(fvecs, self.embeddings):
+            results.append(emb(fvec))
+
+        return results + list(self.sim_siam(fvecs[0]))
+        
+
+
 class EnsembleExtractor(Extractor):
     def __init__(self, model='resnet50', pool='max', use_lnorm=True, pretrained=True, attention=True):
         super().__init__(model=model, pool=pool, use_lnorm=use_lnorm, pretrained=pretrained)
@@ -187,3 +207,57 @@ class EnsembleExtractor(Extractor):
         att_blk = torch.cat((x_proj, proj), 1)
         channel_max = torch.max(att_blk, dim=(2, 3))
         channel_mean = torch.mean(att_blk, dim=(2, 3))
+
+
+class ProjectionMLP(nn.Module):
+    """
+    Projetion layer from SimSiam
+    """
+    def __init__(self, in_dim, mid_dim, out_dim):
+        super().__init__()
+        self.l1 = nn.Sequential(
+            nn.Linear(in_dim, mid_dim),
+            nn.BatchNorm1d(mid_dim),
+            nn.ReLU(inplace=True)
+        )
+        self.l2 = nn.Sequential(
+            nn.Linear(mid_dim, mid_dim),
+            nn.BatchNorm1d(mid_dim),
+            nn.ReLU(inplace=True)
+        )
+        self.l3 = nn.Sequential(
+            nn.Linear(mid_dim, out_dim),
+            nn.BatchNorm1d(out_dim)
+        )
+
+    def forward(self, x):
+        x = self.l1(x)
+        x = self.l2(x)
+        x = self.l3(x)
+        return x
+
+
+class PredictionMLP(nn.Module):
+    def __init__(self, in_dim, mid_dim, out_dim):
+        super().__init__()
+        self.l1 = nn.Sequential(
+            nn.Linear(in_dim, mid_dim),
+            nn.BatchNorm1d(mid_dim),
+            nn.ReLU(inplace=True)
+        )
+        self.l2 = nn.Linear(mid_dim, out_dim)
+
+    def forward(self, x):
+        return self.l2(self.l1(x))
+
+
+class SimSiamEmbedding(nn.Module):
+    def __init__(self, in_dim=2048, out_dim=2048):
+        super().__init__()
+        self.projection = ProjectionMLP(in_dim, in_dim, out_dim)
+        self.prediction = PredictionMLP(in_dim, in_dim//4, out_dim)
+
+    def forward(self, x):
+        z = self.projection(x)
+        p = self.projection(z)
+        return z, p

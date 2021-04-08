@@ -6,13 +6,14 @@ import numpy as np
 import os
 from PIL import Image
 import torchvision.transforms as transforms
+import glob
 
 
 class DMLDataset(data.Dataset):
     """
     This class is responsible for loading the data for deep metric learning.
     """
-    def __init__(self, 
+    def __init__(self,
                  csv_path: str,
                  image_size: int = 224,
                  is_training: bool = True,
@@ -116,9 +117,6 @@ class DMLDataset(data.Dataset):
         return len(self.labels)
 
     def __getitem__(self, item: int) -> dict:
-        """
-
-        """
         img = Image.open(os.path.join(
             self.root,
             self.files[item]))
@@ -127,6 +125,80 @@ class DMLDataset(data.Dataset):
             'text': self.texts[item],
             'posting_id': self.posting_ids[item],
             'label': self.labels[item]
+        }
+
+
+class InstanceAugmentationDMLDataset(data.Dataset):
+    """
+    Dataset used for unsupervised pre-training/auxiliary loss.
+    Assigns a class per image and relies on instance augmentation
+    to make things work.
+    """
+    def __init__(self, image_path: str, image_size: int = 224, is_training: bool = True):
+        super().__init__()
+        self.image_path = image_path
+        self.is_training = is_training
+        self.image_size = image_size
+
+        self.files = list(glob.glob(self.image_path + '/*.jpg'))
+        self.num_classes = len(self.files)
+        self.labels = np.arange(self.num_classes) # needed for BalancedBatchSampler
+
+        normalize = transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+        self.tform = transforms.Compose([
+            transforms.RandomResizedCrop(self.image_size, scale=(0.2, 1.)),
+            transforms.RandomApply([
+                transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
+            ], p=0.8),
+            transforms.RandomGrayscale(p=0.2),
+            #transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize
+        ])
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, item: int) -> dict:
+        img = Image.open(os.path.join(
+            self.image_path, self.files[item]))
+        return {
+            'image': img,
+            'label': item,
+            'text': '',
+            'posting_id': -1
+        }
+
+    def collate_fn(self, elements: list) -> dict:
+        """
+        Collates (pre-processes) a list of elements to a batch.
+
+        Arguments:
+            :elements: is a list of dicts which keys image, text and label.
+        Returns:
+            A dict with keys image text and label containing the batched/preprocessed
+            versions of the text, label and image.
+        """
+        images1 = torch.zeros((len(elements), 3, self.image_size, self.image_size), dtype=torch.float32)
+        images2 = torch.zeros((len(elements), 3, self.image_size, self.image_size), dtype=torch.float32)
+        labels = torch.zeros((len(elements),), dtype=torch.int64)
+        text = []
+        posting_ids = []
+
+        for i in range(len(elements)):
+            images1[i, ...] = self.tform(elements[i]['image'])
+            images2[i, ...] = self.tform(elements[i]['image'])
+            text.append(elements[i]['text'])
+            posting_ids.append(elements[i]['posting_id'])
+            labels[i] = int(elements[i]['label'])
+
+        return {
+            'image1': images1,
+            'image2': images2,
+            'text': text,
+            'label': labels,
+            'posting_id': posting_ids
         }
 
 

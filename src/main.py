@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 import argparse
 import data
 import torch.utils.data as data_util
@@ -13,12 +14,13 @@ import random
 import os
 import model_loader
 import torch.utils.tensorboard as tensorboard
-from model import EmbeddingPredictor
+from model import SimSiamEmbeddingPredictor, EmbeddingPredictor, SimSiamEmbedding
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', default='/home/nax/Downloads/shopee-product-matching/train.csv')
+    parser.add_argument('--instance-dataset', default='/media/bigdisk/ds2/fashion-dataset/fashion-dataset/images/')
     parser.add_argument('--label-split', default='/home/nax/Downloads/shopee-product-matching/train_labels.csv')
     parser.add_argument('--epochs', type=int)
     parser.add_argument('--embedding-size', type=int)
@@ -34,6 +36,7 @@ def main():
     parser.add_argument('--log-filename', default='example')
     parser.add_argument('--config', default='configs/baseline.py')
     parser.add_argument('--output', default='experiments/baseline')
+    parser.add_argument('--instance-augmentation', action='store_true')
 
     args = parser.parse_args()
 
@@ -54,7 +57,7 @@ def main():
     train_labels = np.loadtxt(args.label_split, dtype=np.int64)
     dataset = data.DMLDataset(args.dataset, image_size=args.image_size, subset_labels=train_labels)
     sampler = data.BalancedBatchSampler(
-            batch_size=args.batch_size, 
+            batch_size=args.batch_size,
             dataset=dataset,
             samples_per_class=args.samples_per_class)
     loader = data_util.DataLoader(
@@ -62,6 +65,19 @@ def main():
             batch_size=args.batch_size,
             sampler=sampler,
             collate_fn=dataset.collate_fn)
+
+    instance_loader = None
+    if args.instance_augmentation:
+        instance_dataset = data.InstanceAugmentationDMLDataset(
+            args.instance_dataset,
+            image_size=args.image_size)
+
+        instance_loader = data_util.DataLoader(
+            instance_dataset,
+            batch_size=args.batch_size//4,
+            drop_last=True,
+            collate_fn=instance_dataset.collate_fn)
+
 
     val_labels = data.get_val_labels(args.dataset, set(train_labels))
     val_labels = list(val_labels)
@@ -100,8 +116,15 @@ def main():
         emb.cuda()
         embeddings.append(emb)
 
-    model = EmbeddingPredictor(backbone, embeddings)
-    model.train()
+    sim_siam = None
+    if args.instance_augmentation:
+        sim_siam = SimSiamEmbedding()
+        sim_siam.cuda()
+        model = SimSiamEmbeddingPredictor(backbone, embeddings, sim_siam)
+        model.train()
+    else:
+        model = EmbeddingPredictor(backbone, embeddings)
+        model.train()
 
     def set_bn_eval(m):
         if m.__class__.__name__.find('BatchNorm') != -1:
@@ -185,6 +208,10 @@ def main():
 
     logging.info(f'warmup for {args.warmup_k} epochs')
 
+    instance_aug_iter = None
+    if args.instance_augmentation:
+        instange_aug_iter = iter(instance_loader)
+
     for e in range(args.warmup_k):
         for batch in loader:
             imgs = batch['image']
@@ -193,9 +220,27 @@ def main():
 
             opt_warmup.zero_grad()
             ms = model(imgs.cuda())
+
+            if args.instance_augmentation:
+                ms = ms[:-2]
+
             loss = 0
             for m, criterion in zip(ms, criterion_list):
                 loss += criterion(m, labels.cuda())
+
+            if args.instance_augmentation:
+                try:
+                    instance_batch = next(instance_aug_iter)
+                except:
+                    instance_aug_iter = iter(instance_loader)
+                    instance_batch = next(instance_aug_iter)
+
+                preds1 = model(instance_batch['image1'])
+                preds2 = model(instance_batch['image2'])
+                z1, p1 = preds1[-2:]
+                z2, p2 = preds2[-2:]
+
+                loss += negcos(p1, z2) / 2.0 + negcos(p2, z1) / 2.0
 
             if args.apex:
                 with amp.scale_loss(loss, opt_warmup) as scaled_loss:
@@ -233,9 +278,26 @@ def main():
             it += 1
             ms = model(imgs.cuda())
 
+            if args.instance_augmentation:
+                ms = ms[:-2]
+
             loss = 0
             for m, criterion in zip(ms, criterion_list):
                 loss += criterion(m, labels.cuda())
+
+            if args.instance_augmentation:
+                try:
+                    instance_batch = next(instance_aug_iter)
+                except:
+                    instance_aug_iter = iter(instance_loader)
+                    instance_batch = next(instance_aug_iter)
+
+                preds1 = model(instance_batch['image1'])
+                preds2 = model(instance_batch['image2'])
+                z1, p1 = preds1[-2:]
+                z2, p2 = preds2[-2:]
+
+                loss += negcos(p1, z2) / 2.0 + negcos(p2, z1) / 2.0
 
             if args.apex:
                 with amp.scale_loss(loss, opt) as scaled_loss:
@@ -287,6 +349,13 @@ def main():
 
         writer.flush()
     writer.close()
+
+
+def negcos(p, z):
+    # z = z.detach()
+    p = F.normalize(p, dim=1)
+    z = F.normalize(z, dim=1)
+    return -(p*z.detach()).sum(dim=1).mean()
 
 
     

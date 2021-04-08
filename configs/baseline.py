@@ -24,6 +24,7 @@ config = {
     'is_ensemble': False,
     'samples_per_class': 2,
     'num_gradcum': 1,
+    'mixup_alpha': 0.0,
     'warmup_k': 5,
     'model': {
         'type': 'model.Extractor'
