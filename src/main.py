@@ -19,9 +19,9 @@ from model import SimSiamEmbeddingPredictor, EmbeddingPredictor, SimSiamEmbeddin
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', default='/home/nax/Downloads/shopee-product-matching/train.csv')
-    parser.add_argument('--instance-dataset', default='/media/bigdisk/ds2/fashion-dataset/fashion-dataset/images/')
-    parser.add_argument('--label-split', default='/home/nax/Downloads/shopee-product-matching/train_labels.csv')
+    parser.add_argument('--dataset', default='/home/ubuntu/shopee-dataset/train.csv')
+    parser.add_argument('--instance-dataset', default='/home/ubuntu/fashion/fashion-dataset/images/')
+    parser.add_argument('--label-split', default='/home/ubuntu/shopee-dataset/train_labels.csv')
     parser.add_argument('--epochs', type=int)
     parser.add_argument('--embedding-size', type=int)
     parser.add_argument('--batch-size', type=int)
@@ -36,6 +36,7 @@ def main():
     parser.add_argument('--log-filename', default='example')
     parser.add_argument('--config', default='configs/baseline.py')
     parser.add_argument('--output', default='experiments/baseline')
+    parser.add_argument('--instance-augmentation-weight', type=float, default=1.0)
     parser.add_argument('--instance-augmentation', action='store_true')
 
     args = parser.parse_args()
@@ -68,6 +69,7 @@ def main():
             dataset,
             batch_size=args.batch_size,
             sampler=sampler,
+            num_workers=4,
             collate_fn=dataset.collate_fn)
 
     instance_loader = None
@@ -80,6 +82,7 @@ def main():
             instance_dataset,
             batch_size=args.batch_size//4,
             drop_last=True,
+            num_workers=4,
             collate_fn=instance_dataset.collate_fn)
 
 
@@ -185,7 +188,7 @@ def main():
     ], **config['opt']['args']['base'])
 
     if args.apex:
-        (model, *criterion_list), (opt, opt_warmup) = amp.initialize([model] + criterion_list, (opt, opt_warmup), opt_level='O1')
+        (model, *criterion_list), (opt, opt_warmup) = amp.initialize([model] + criterion_list, [opt, opt_warmup], opt_level='O1')
         model = torch.nn.DataParallel(model)
 
     scheduler = util.get_class(config['lr_scheduler']['type'])(
@@ -244,7 +247,7 @@ def main():
                 z1, p1 = preds1[-2:]
                 z2, p2 = preds2[-2:]
 
-                loss += negcos(p1, z2) / 2.0 + negcos(p2, z1) / 2.0
+                loss += (negcos(p1, z2) / 2.0 + negcos(p2, z1) / 2.0) * args.instance_augmentation_weight
 
             if args.apex:
                 with amp.scale_loss(loss, opt_warmup) as scaled_loss:
