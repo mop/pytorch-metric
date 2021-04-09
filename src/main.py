@@ -69,7 +69,7 @@ def main():
             dataset,
             batch_size=args.batch_size,
             sampler=sampler,
-            num_workers=4,
+            num_workers=8,
             collate_fn=dataset.collate_fn)
 
     instance_loader = None
@@ -82,7 +82,7 @@ def main():
             instance_dataset,
             batch_size=args.batch_size//4,
             drop_last=True,
-            num_workers=4,
+            num_workers=8,
             collate_fn=instance_dataset.collate_fn)
 
 
@@ -96,7 +96,8 @@ def main():
     val_loader = data_util.DataLoader(
             val_dataset,
             batch_size=args.batch_size,
-            collate_fn=val_dataset.collate_fn
+            collate_fn=val_dataset.collate_fn,
+            num_workers=4
     )
 
     print(f'# samples {len(dataset)}')
@@ -277,6 +278,7 @@ def main():
 
         tic_per_epoch = time.time()
         losses_per_epoch = []
+        negcos_loss_per_epoch = []
 
         for batch in loader:
             imgs, text, labels = batch['image'], batch['text'], batch['label']
@@ -304,7 +306,9 @@ def main():
                 z1, p1 = preds1[-2:]
                 z2, p2 = preds2[-2:]
 
-                loss += negcos(p1, z2) / 2.0 + negcos(p2, z1) / 2.0
+                negcos_loss = (negcos(p1, z2) / 2.0 + negcos(p2, z1) / 2.0) * args.instance_augmentation_weight
+                loss += negcos_loss
+                negcos_loss_per_epoch.append(negcos_loss.detach().cpu().numpy())
 
             if args.apex:
                 with amp.scale_loss(loss, opt) as scaled_loss:
@@ -347,7 +351,7 @@ def main():
         scores.append(acc)
         scheduler.step(acc)
         
-        logging.info(f'Accuracy: {acc} in epoch: {e}, loss: {losses[-1]}, val_time: {toc_val - tic_val}')
+        logging.info(f'Accuracy: {acc} in epoch: {e}, loss: {losses[-1]}, val_time: {toc_val - tic_val}, negcos: {np.mean(negcos_loss_per_epoch)}')
         writer.add_scalar('loss_train', losses[-1], e)
         writer.add_scalar('val_accuracy', scores[-1], e)
         writer.add_scalar('train_time', toc_per_epoch - tic_per_epoch, e)
