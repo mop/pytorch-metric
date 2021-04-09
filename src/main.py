@@ -14,7 +14,8 @@ import random
 import os
 import model_loader
 import torch.utils.tensorboard as tensorboard
-from model import SimSiamEmbeddingPredictor, EmbeddingPredictor, SimSiamEmbedding
+from torch.autograd import grad
+from model import SimSiamEmbeddingPredictor, EmbeddingPredictor, SimSiamEmbedding, SwitchableBatchNorm
 
 
 def main():
@@ -80,7 +81,7 @@ def main():
 
         instance_loader = data_util.DataLoader(
             instance_dataset,
-            batch_size=args.batch_size//4,
+            batch_size=args.batch_size,
             drop_last=True,
             num_workers=8,
             collate_fn=instance_dataset.collate_fn)
@@ -143,6 +144,8 @@ def main():
 
     if not args.apex:
         model = torch.nn.DataParallel(model)
+    if args.instance_augmentation:
+        model = SwitchableBatchNorm.convert_switchable_batchnorm(model, 2)
     model = model.cuda()
 
     criterion_list = []
@@ -226,6 +229,9 @@ def main():
             text = batch['text']
             labels = batch['label']
 
+            if args.instance_augmentation:
+                SwitchableBatchNorm.switch_to(model, 0)
+
             opt_warmup.zero_grad()
             ms = model(imgs.cuda())
 
@@ -243,12 +249,20 @@ def main():
                     instance_aug_iter = iter(instance_loader)
                     instance_batch = next(instance_aug_iter)
 
+                SwitchableBatchNorm.switch_to(model, 1)
                 preds1 = model(instance_batch['image1'])
                 preds2 = model(instance_batch['image2'])
                 z1, p1 = preds1[-2:]
                 z2, p2 = preds2[-2:]
 
-                loss += (negcos(p1, z2) / 2.0 + negcos(p2, z1) / 2.0) * args.instance_augmentation_weight
+                negcos_loss = (negcos(p1, z2) / 2.0 + negcos(p2, z1) / 2.0) * args.instance_augmentation_weight
+
+                #d_loss1, = grad(negcos_loss, (backbone,))
+                #d_loss2, = grad(loss, (backbone,))
+
+                #print(d_loss1, d_loss2)
+                loss += negcos_loss
+                SwitchableBatchNorm.switch_to(model, 0)
 
             if args.apex:
                 with amp.scale_loss(loss, opt_warmup) as scaled_loss:
@@ -279,12 +293,18 @@ def main():
         tic_per_epoch = time.time()
         losses_per_epoch = []
         negcos_loss_per_epoch = []
+        grad_norm_negcos = []
+        grad_norm_loss = []
 
         for batch in loader:
             imgs, text, labels = batch['image'], batch['text'], batch['label']
 
             opt.zero_grad()
             it += 1
+
+            if args.instance_augmentation:
+                SwitchableBatchNorm.switch_to(model, 0)
+
             ms = model(imgs.cuda())
 
             if args.instance_augmentation:
@@ -301,12 +321,18 @@ def main():
                     instance_aug_iter = iter(instance_loader)
                     instance_batch = next(instance_aug_iter)
 
+                SwitchableBatchNorm.switch_to(model, 1)
                 preds1 = model(instance_batch['image1'])
                 preds2 = model(instance_batch['image2'])
+                SwitchableBatchNorm.switch_to(model, 0)
                 z1, p1 = preds1[-2:]
                 z2, p2 = preds2[-2:]
 
                 negcos_loss = (negcos(p1, z2) / 2.0 + negcos(p2, z1) / 2.0) * args.instance_augmentation_weight
+                #d_loss1, = grad(negcos_loss, (backbone,))
+                #d_loss2, = grad(loss, (backbone,))
+                #grad_norm_negcos.append(d_loss1.detach().cpu().numpy())
+                #grad_norm_loss.append(d_loss2.detach().cpu().numpy())
                 loss += negcos_loss
                 negcos_loss_per_epoch.append(negcos_loss.detach().cpu().numpy())
 
@@ -352,6 +378,7 @@ def main():
         scheduler.step(acc)
         
         logging.info(f'Accuracy: {acc} in epoch: {e}, loss: {losses[-1]}, val_time: {toc_val - tic_val}, negcos: {np.mean(negcos_loss_per_epoch)}')
+        #logging.info(f'grad_negcos: {np.mean(grad_norm_negcos)} grad_loss: {np.mean(grad_norm_loss)}')
         writer.add_scalar('loss_train', losses[-1], e)
         writer.add_scalar('val_accuracy', scores[-1], e)
         writer.add_scalar('train_time', toc_per_epoch - tic_per_epoch, e)

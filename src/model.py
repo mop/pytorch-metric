@@ -3,6 +3,39 @@ import torch.nn as nn
 import torch
 import numpy as np
 import torch.nn.functional as F
+import copy
+
+
+class SwitchableBatchNorm(nn.Module):
+    def __init__(self, batch_norm_layer, num_batchnorms=2):
+        super().__init__()
+        self.active = 0
+        self.num_batchnorms = num_batchnorms
+
+        self.batch_norm_layers = []
+        for i in range(self.num_batchnorms):
+            self.batch_norm_layers.append(copy.deepcopy(batch_norm_layer))
+        self.batch_norm_layers = nn.ModuleList(self.batch_norm_layers)
+
+    def forward(self, x):
+        return self.batch_norm_layers[self.active](x)
+
+    @classmethod
+    def convert_switchable_batchnorm(cls, module, num_batchnorms=2):
+        module_output = module
+        if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+            module_output = SwitchableBatchNorm(module, num_batchnorms=num_batchnorms)
+        for name, child in module.named_children():
+            module_output.add_module(name, cls.convert_switchable_batchnorm(child, num_batchnorms))
+        del module
+        return module_output
+
+    @classmethod
+    def switch_to(cls, module, active=0):
+        if isinstance(module, SwitchableBatchNorm):
+            module.active = active
+        for name, child in module.named_children():
+            cls.switch_to(child, active)
 
 
 class Extractor(nn.Module):
