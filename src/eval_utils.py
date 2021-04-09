@@ -28,6 +28,8 @@ def extract_features(model: torch.nn.Module, dataset: data.DMLDataset) -> (np.nd
         #__import__('pdb').set_trace()
         fvecs = np.concatenate(tmp, axis=1)
         all_fvecs.append(fvecs)
+        if len(label.size()) > 1:
+            label = torch.argmax(label, dim=1)
         all_labels.append(label.cpu().detach().numpy())
 
     all_labels = np.concatenate(all_labels)

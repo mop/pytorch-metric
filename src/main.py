@@ -55,7 +55,11 @@ def main():
     torch.cuda.manual_seed(args.seed)
 
     train_labels = np.loadtxt(args.label_split, dtype=np.int64)
-    dataset = data.DMLDataset(args.dataset, image_size=args.image_size, subset_labels=train_labels)
+    dataset = data.DMLDataset(
+            args.dataset,
+            image_size=args.image_size,
+            mixup_alpha=config['mixup_alpha'],
+            subset_labels=train_labels)
     sampler = data.BalancedBatchSampler(
             batch_size=args.batch_size,
             dataset=dataset,
@@ -82,7 +86,7 @@ def main():
     val_labels = data.get_val_labels(args.dataset, set(train_labels))
     val_labels = list(val_labels)
     val_dataset = data.DMLDataset(
-            args.dataset, 
+            args.dataset,
             image_size=args.image_size,
             is_training=False,
             subset_labels=val_labels)

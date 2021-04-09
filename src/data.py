@@ -8,6 +8,25 @@ from PIL import Image
 import torchvision.transforms as transforms
 import glob
 
+def onehot(label, n_classes):
+    return torch.zeros(label.size(0), n_classes).scatter_(
+                    1, label.view(-1, 1), 1)
+
+
+def mixup(data, targets, alpha, n_classes):
+    indices = torch.randperm(data.size(0))
+    data2 = data[indices]
+    targets2 = targets[indices]
+
+    targets = onehot(targets, n_classes)
+    targets2 = onehot(targets2, n_classes)
+
+    lam = torch.FloatTensor([np.random.beta(alpha, alpha)])
+    data = data * lam + data2 * (1 - lam)
+    targets = targets * lam + targets2 * (1 - lam)
+
+    return data, targets
+
 
 class DMLDataset(data.Dataset):
     """
@@ -16,6 +35,7 @@ class DMLDataset(data.Dataset):
     def __init__(self,
                  csv_path: str,
                  image_size: int = 224,
+                 mixup_alpha: float = 0.0,
                  is_training: bool = True,
                  is_testing: bool = False,
                  subset_labels=None):
@@ -25,12 +45,14 @@ class DMLDataset(data.Dataset):
         Arguments:
             csv_path: Path to the training csv file.
             image_size: size of the images (after pre-processing)
+            mixup_alpha: mixup fraction
             is_training: True if it is training (and augmentation should be performed)
             is_testing: True if it is testing (images will be loaded from the test folder)
             subset_labels: Subset of labels to load for training (if None, all are loaded)
         """
         self.csv_path = csv_path
         self.image_size = image_size
+        self.mixup_alpha = mixup_alpha
         self.is_training = is_training
         self.is_testing = is_testing
         self.subset_labels = subset_labels
@@ -111,6 +133,11 @@ class DMLDataset(data.Dataset):
             posting_ids.append(elements[i]['posting_id'])
             if not self.is_testing:
                 labels[i] = int(elements[i]['label'])
+        if self.mixup_alpha > 0 and not self.is_training:
+            images, labels = mixup(images, labels, self.mixup_alpha, self.num_classes)
+        else:
+            labels = onehot(labels, self.num_classes)
+
         return { 'image': images, 'text': text, 'label': labels, 'posting_id': posting_ids }
 
     def __len__(self):
