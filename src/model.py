@@ -137,6 +137,38 @@ class CBAMAttention(nn.Module):
 
         att_chan = torch.sigmoid(self.channel_spatial(feat))
         return att1 * att_chan
+
+
+class CBAMPyrAttention(nn.Module):
+    def __init__(self, channels_in=256, attention_channels=1024):
+        super().__init__()
+        self.channels_in = channels_in
+        self.attention_channels = attention_channels
+
+        self.channel_attention1 = nn.Linear(self.channels_in, self.channels_in)
+        self.channel_relu = nn.ReLU()
+        self.channel_attention2 = nn.Linear(self.channels_in, self.attention_channels)
+
+        self.channel_spatial = nn.Conv2d(4, 1, 7, padding=(3, 3))
+
+    def forward(self, x):
+        x, fvecs = x
+        red_mean = torch.mean(x, dim=(2,3))
+        red_max = torch.amax(x, dim=(2,3))
+        exc1 = self.channel_attention2(self.channel_relu(self.channel_attention1(red_mean)))
+        exc2 = self.channel_attention2(self.channel_relu(self.channel_attention1(red_max)))
+        exc = torch.sigmoid(exc1 + exc2)
+
+        att1 = exc[:, :, None, None] * fvecs
+
+        feat1 = torch.mean(att1, dim=1, keepdim=True)
+        feat2 = torch.amax(att1, dim=1, keepdim=True)
+        feat3 = torch.mean(x, dim=1, keepdim=True)
+        feat4 = torch.amax(x, dim=1, keepdim=True)
+        feat = torch.cat((feat1, feat2, feat3, feat4), axis=1)
+
+        att_chan = torch.sigmoid(self.channel_spatial(feat))
+        return att1 * att_chan
         
 
 
@@ -240,6 +272,169 @@ class EnsembleExtractor(Extractor):
         att_blk = torch.cat((x_proj, proj), 1)
         channel_max = torch.max(att_blk, dim=(2, 3))
         channel_mean = torch.mean(att_blk, dim=(2, 3))
+
+
+class AttentionEnsembleExtractor(Extractor):
+    def __init__(self, model='resnet50', pool='max', pool_lower='avg', use_lnorm=True, pretrained=True, attention=True):
+        super().__init__(model=model, pool=pool, use_lnorm=use_lnorm, pretrained=pretrained)
+
+        self.lnorm1 = None
+        self.lnorm2 = None
+
+        if use_lnorm:
+            self.lnorm1 = nn.LayerNorm(512, elementwise_affine=False).cuda()
+            self.lnorm2 = nn.LayerNorm(1024, elementwise_affine=False).cuda()
+
+        if pool_lower == 'avg':
+            self.pool1 = nn.AdaptiveAvgPool2d((1, 1))
+            self.pool2 = nn.AdaptiveAvgPool2d((1, 1))
+        elif pool_lower == 'max':
+            self.pool1 = nn.AdaptiveMaxPool2d((1, 1))
+            self.pool2 = nn.AdaptiveMaxPool2d((1, 1))
+
+        self.top_layer = nn.Conv2d(2048, 256, kernel_size=1, stride=1, padding=0) # compression layer
+        self.lat1_layer = nn.Conv2d(512, 256, kernel_size=1, stride=1, padding=0)
+        self.lat2_layer = nn.Conv2d(1024, 256, kernel_size=1, stride=1, padding=0)
+
+        self.smooth1 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+        self.smooth2 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+
+        self.att1 = CBAMPyrAttention(256, 512)
+        self.att2 = CBAMPyrAttention(256, 1024)
+
+        #self.spatial_att1 = nn.Conv2d(1, 1, 7, 7)
+        #self.spatial_att2 = nn.Conv2d(1, 1, 7, 7)
+
+    def forward(self, x):
+        x = self.base.conv1(x)
+        x = self.base.bn1(x)
+        x = self.base.relu(x)
+        x = self.base.maxpool(x)
+
+        x = self.base.layer1(x)
+        x = self.base.layer2(x)
+        att_src_1 = x
+        x = self.base.layer3(x)
+        att_src_2 = x
+        x = self.base.layer4(x)
+
+        top_proj = self.top_layer(x)
+        
+        x = self.pool(x)
+        x = x.reshape(x.size(0), -1)
+
+        if self.lnorm != None:
+            x = self.lnorm(x)
+
+        fvec1_pyr = self.lat1_layer(att_src_1) + F.upsample(top_proj, att_src_1.size()[2:], mode='bilinear')
+        fvec2_pyr = self.lat2_layer(att_src_2) + F.upsample(fvec1_pyr, att_src_2.size()[2:], mode='bilinear')
+
+        out1 = self.smooth1(fvec1_pyr)
+        out2 = self.smooth2(fvec2_pyr)
+
+        att_src_1 = self.att1((out1, att_src_1))
+        att_src_2 = self.att2((out2, att_src_2))
+
+        fvec1 = self.pool1(att_src_1)
+        fvec1 = fvec1.reshape(fvec1.size(0), -1)
+        fvec2 = self.pool2(att_src_2)
+        fvec2 = fvec2.reshape(fvec2.size(0), -1)
+        if self.lnorm1 is not None:
+            fvec1 = self.lnorm1(fvec1)
+            fvec2 = self.lnorm2(fvec2)
+        return x, fvec1, fvec2
+
+    def attend_pred(self, x, proj, lat_layer):
+        x_proj = lat_layer(x)
+        att_blk = torch.cat((x_proj, proj), 1)
+        channel_max = torch.max(att_blk, dim=(2, 3))
+        channel_mean = torch.mean(att_blk, dim=(2, 3))
+
+
+class AttentionFuseEnsembleExtractor(Extractor):
+    def __init__(self, 
+                 model='resnet50',
+                 pool='max',
+                 pool_lower='avg',
+                 hidden_size=512,
+                 use_lnorm=True,
+                 pretrained=True,
+                 attention=True):
+        super().__init__(model=model, pool=pool, use_lnorm=use_lnorm, pretrained=pretrained)
+
+        self.lnorm1 = None
+        self.lnorm2 = None
+        self.hidden_size = hidden_size
+
+        if use_lnorm:
+            self.lnorm1 = nn.LayerNorm(hidden_size, elementwise_affine=False).cuda()
+            self.lnorm2 = nn.LayerNorm(hidden_size, elementwise_affine=False).cuda()
+
+        if pool_lower == 'avg':
+            self.pool1 = nn.AdaptiveAvgPool2d((1, 1))
+            self.pool2 = nn.AdaptiveAvgPool2d((1, 1))
+        elif pool_lower == 'max':
+            self.pool1 = nn.AdaptiveMaxPool2d((1, 1))
+            self.pool2 = nn.AdaptiveMaxPool2d((1, 1))
+
+        self.top_layer = nn.Conv2d(2048, hidden_size, kernel_size=1, stride=1, padding=0) # compression layer
+        self.lat1_layer = nn.Conv2d(512, hidden_size, kernel_size=1, stride=1, padding=0)
+        self.lat2_layer = nn.Conv2d(1024, hidden_size, kernel_size=1, stride=1, padding=0)
+
+        self.smooth1 = nn.Conv2d(hidden_size, hidden_size, kernel_size=3, stride=1, padding=1)
+        self.smooth2 = nn.Conv2d(hidden_size, hidden_size, kernel_size=3, stride=1, padding=1)
+
+        self.att1 = CBAMPyrAttention(hidden_size, hidden_size)
+        self.att2 = CBAMPyrAttention(hidden_size, hidden_size)
+
+        #self.spatial_att1 = nn.Conv2d(1, 1, 7, 7)
+        #self.spatial_att2 = nn.Conv2d(1, 1, 7, 7)
+
+    def forward(self, x):
+        x = self.base.conv1(x)
+        x = self.base.bn1(x)
+        x = self.base.relu(x)
+        x = self.base.maxpool(x)
+
+        x = self.base.layer1(x)
+        x = self.base.layer2(x)
+        att_src_1 = x
+        x = self.base.layer3(x)
+        att_src_2 = x
+        x = self.base.layer4(x)
+
+        top_proj = self.top_layer(x)
+        
+        x = self.pool(x)
+        x = x.reshape(x.size(0), -1)
+
+        if self.lnorm != None:
+            x = self.lnorm(x)
+
+        fvec1_pyr = self.lat1_layer(att_src_1) + F.upsample(top_proj, att_src_1.size()[2:], mode='bilinear')
+        fvec2_pyr = self.lat2_layer(att_src_2) + F.upsample(fvec1_pyr, att_src_2.size()[2:], mode='bilinear')
+
+        out1 = self.smooth1(fvec1_pyr)
+        out2 = self.smooth2(fvec2_pyr)
+
+        att_src_1 = self.att1((out1, out1))
+        att_src_2 = self.att2((out2, out2))
+
+        fvec1 = self.pool1(att_src_1)
+        fvec1 = fvec1.reshape(fvec1.size(0), -1)
+        fvec2 = self.pool2(att_src_2)
+        fvec2 = fvec2.reshape(fvec2.size(0), -1)
+        if self.lnorm1 is not None:
+            fvec1 = self.lnorm1(fvec1)
+            fvec2 = self.lnorm2(fvec2)
+        return x, fvec1, fvec2
+
+    def attend_pred(self, x, proj, lat_layer):
+        x_proj = lat_layer(x)
+        att_blk = torch.cat((x_proj, proj), 1)
+        channel_max = torch.max(att_blk, dim=(2, 3))
+        channel_mean = torch.mean(att_blk, dim=(2, 3))
+
 
 
 class ProjectionMLP(nn.Module):
