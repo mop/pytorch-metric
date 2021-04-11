@@ -344,11 +344,27 @@ class AttentionEnsembleExtractor(Extractor):
             fvec2 = self.lnorm2(fvec2)
         return x, fvec1, fvec2
 
-    def attend_pred(self, x, proj, lat_layer):
-        x_proj = lat_layer(x)
-        att_blk = torch.cat((x_proj, proj), 1)
-        channel_max = torch.max(att_blk, dim=(2, 3))
-        channel_mean = torch.mean(att_blk, dim=(2, 3))
+
+class AttentionEnsembleResNext101Extractor(Extractor):
+    def __init__(self,
+                 model='resnext101_32x8d',
+                 pool='max', 
+                 pool_lower='avg', 
+                 use_lnorm=True,
+                 pretrained=True,
+                 attention=True):
+        super().__init__(model=model, pool=pool, use_lnorm=use_lnorm, pretrained=pretrained)
+
+class AttentionEnsembleResNext50Extractor(Extractor):
+    def __init__(self,
+                 model='resnext50_32x4d',
+                 pool='max', 
+                 pool_lower='avg', 
+                 use_lnorm=True,
+                 pretrained=True,
+                 attention=True):
+        super().__init__(model=model, pool=pool, use_lnorm=use_lnorm, pretrained=pretrained)
+
 
 
 class AttentionFuseEnsembleExtractor(Extractor):
