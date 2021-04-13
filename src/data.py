@@ -8,12 +8,15 @@ from PIL import Image
 import torchvision.transforms as transforms
 import glob
 
-def onehot(label, n_classes):
+def onehot(label: np.ndarray, n_classes: int) -> torch.Tensor:
+    """
+    Returns a one-hot encoding of the labels
+    """
     return torch.zeros(label.size(0), n_classes).scatter_(
                     1, label.view(-1, 1), 1)
 
 
-def mixup(data, targets, alpha, n_classes):
+def mixup(data: torch.Tensor, targets: torch.Tensor, alpha: float, n_classes: int) -> (np.ndarray, np.ndarray):
     indices = torch.randperm(data.size(0))
     data2 = data[indices]
     targets2 = targets[indices]
@@ -133,10 +136,11 @@ class DMLDataset(data.Dataset):
             posting_ids.append(elements[i]['posting_id'])
             if not self.is_testing:
                 labels[i] = int(elements[i]['label'])
-        if self.mixup_alpha > 0 and not self.is_training:
-            images, labels = mixup(images, labels, self.mixup_alpha, self.num_classes)
-        else:
-            labels = onehot(labels, self.num_classes)
+        if not self.is_testing:
+            if self.mixup_alpha > 0 and self.is_training:
+                images, labels = mixup(images, labels, self.mixup_alpha, self.num_classes)
+            else:
+                labels = onehot(labels, self.num_classes)
 
         return { 'image': images, 'text': text, 'label': labels, 'posting_id': posting_ids }
 
