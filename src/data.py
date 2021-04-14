@@ -131,7 +131,7 @@ class DMLDataset(data.Dataset):
         posting_ids = []
 
         for i in range(len(elements)):
-            if not self.is_training:
+            if self.is_training:
                 images[i, ...] = self.tform(elements[i]['image'])
             else:
                 images[i, ...] = elements[i]['image']
