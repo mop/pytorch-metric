@@ -131,7 +131,10 @@ class DMLDataset(data.Dataset):
         posting_ids = []
 
         for i in range(len(elements)):
-            images[i, ...] = self.tform(elements[i]['image'])
+            if not self.is_training:
+                images[i, ...] = self.tform(elements[i]['image'])
+            else:
+                images[i, ...] = elements[i]['image']
             text.append(elements[i]['text'])
             posting_ids.append(elements[i]['posting_id'])
             if not self.is_testing:
@@ -151,6 +154,8 @@ class DMLDataset(data.Dataset):
         img = Image.open(os.path.join(
             self.root,
             self.files[item]))
+        if not self.is_training:
+            img = self.tform(img)
         return {
             'image': img,
             'text': self.texts[item],
