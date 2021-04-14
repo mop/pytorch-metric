@@ -41,6 +41,7 @@ class DMLDataset(data.Dataset):
                  mixup_alpha: float = 0.0,
                  is_training: bool = True,
                  is_testing: bool = False,
+                 onehot_labels: bool = True,
                  subset_labels=None):
         """
         Initializes the DML dataset.
@@ -51,6 +52,7 @@ class DMLDataset(data.Dataset):
             mixup_alpha: mixup fraction
             is_training: True if it is training (and augmentation should be performed)
             is_testing: True if it is testing (images will be loaded from the test folder)
+            onehot_labels: True if one hot encoded labels should be returned during training
             subset_labels: Subset of labels to load for training (if None, all are loaded)
         """
         self.csv_path = csv_path
@@ -58,6 +60,7 @@ class DMLDataset(data.Dataset):
         self.mixup_alpha = mixup_alpha
         self.is_training = is_training
         self.is_testing = is_testing
+        self.onehot_labels = onehot_labels
         self.subset_labels = subset_labels
 
         self.df = pd.read_csv(csv_path)
@@ -142,7 +145,7 @@ class DMLDataset(data.Dataset):
         if not self.is_testing:
             if self.mixup_alpha > 0 and self.is_training:
                 images, labels = mixup(images, labels, self.mixup_alpha, self.num_classes)
-            else:
+            elif self.onehot_labels:
                 labels = onehot(labels, self.num_classes)
 
         return { 'image': images, 'text': text, 'label': labels, 'posting_id': posting_ids }
