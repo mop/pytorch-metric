@@ -48,12 +48,14 @@ def train_text_embeddings(dataset: data.DMLDataset, embedding_size: int = 128):
 
     return model
 
-def encode_text(model, dataset: data.DMLDataset) -> (np.ndarray, np.ndarray):
+def encode_text(model, dataset: data.DMLDataset) -> (np.ndarray, np.ndarray, list):
     all_texts = []
     all_labels = []
+    all_posting_ids = []
     for batch in dataset:
         all_texts += [preprocess_text(t) for t in batch['text']]
         all_labels.append(batch['label'].detach().cpu().numpy())
+        all_posting_ids += batch['posting_id']
     all_labels = np.concatenate(all_labels)
 
     all_fvecs = []
@@ -63,7 +65,7 @@ def encode_text(model, dataset: data.DMLDataset) -> (np.ndarray, np.ndarray):
 
     all_fvecs = np.vstack(all_fvecs)
     all_fvecs = all_fvecs / np.maximum(1e-5, np.linalg.norm(all_fvecs, axis=-1, keepdims=True))
-    return all_fvecs, all_labels
+    return all_fvecs, all_labels, all_posting_ids
 
 
 def train_text_tfidf(dataset: data.DMLDataset, max_features: int = 1000, ngram_range=(1, 1)):
@@ -85,19 +87,21 @@ def train_text_tfidf(dataset: data.DMLDataset, max_features: int = 1000, ngram_r
     return tfidf
 
 def encode_text_tfidf(model: feature_extraction.text.TfidfVectorizer,
-                      dataset: data.DMLDataset) -> (np.ndarray, np.ndarray):
+                      dataset: data.DMLDataset) -> (np.ndarray, np.ndarray, list):
     all_texts = []
     all_labels = []
+    all_posting_ids = []
     for i, batch in enumerate(dataset):
         if i % 10 == 0:
             print(f'encode text: batch {i}')
         all_texts += [preprocess_text(t) for t in batch['text']]
         all_labels.append(batch['label'].detach().cpu().numpy())
+        all_posting_ids += batch['posting_id']
     all_labels = np.concatenate(all_labels)
 
     all_fvecs = model.transform(all_texts)
     all_fvecs = normalize(all_fvecs, norm='l2', axis=1)
 
     #all_fvecs = all_fvecs / np.maximum(1e-5, np.linalg.norm(all_fvecs, axis=-1, keepdims=True))
-    return all_fvecs, all_labels
+    return all_fvecs, all_labels, all_posting_ids
 
