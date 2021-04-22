@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--embedding-size', type=int)
     parser.add_argument('--batch-size', type=int)
     parser.add_argument('--image-size', type=int)
+    parser.add_argument('--use_cuda', action='store_true')
 
     args = parser.parse_args()
 
@@ -33,13 +34,19 @@ def main():
     train_labels = np.loadtxt(args.train_label_split, dtype=np.int64)
     val_labels = data.get_val_labels(args.dataset, set(train_labels))
     val_labels = list(val_labels)
+    #val_dataset = data.DMLDataset(args.dataset, 
+    #        image_size=args.image_size,
+    #        is_training=False,
+    #        onehot_labels=False,
+    #        subset_labels=val_labels)
     val_dataset = data.DMLDataset(args.dataset, 
             image_size=args.image_size,
             is_training=False,
-            subset_labels=val_labels)
+            onehot_labels=False)
     val_loader = data_util.DataLoader(
             val_dataset,
             batch_size=args.batch_size,
+            num_workers=2,
             collate_fn=val_dataset.collate_fn
     )
     backbone, embeddings, model, states = model_loader.load_model(config, args, args.model)
@@ -59,8 +66,9 @@ def main():
 
     model.eval()
 
-    print(f'Val accuracy: {eval_utils.evaluate(model, val_loader)}')
-    print(f'F1: {eval_utils.f1_evaluate(model, val_loader)}')
+    print(f'Val accuracy: {eval_utils.evaluate(model, val_loader, use_cuda=args.use_cuda)}')
+    print(f'F1: {eval_utils.f1_evaluate(model, val_loader, use_cuda=args.use_cuda)}')
+    print(f'F1: {eval_utils.f1_evaluate(model, val_loader, threshold=1.070329, use_cuda=args.use_cuda)}')
 
 
 if __name__ == "__main__":

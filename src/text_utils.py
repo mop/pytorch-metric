@@ -9,7 +9,7 @@ from sklearn.preprocessing import normalize
 import numpy as np
 
 
-def preprocess_text(text: str, stem:bool =True, lemm: bool = True, stopwords: list=None):
+def preprocess_text(text: str, stem:bool =False, lemm: bool = False, stopwords: list=None):
      ## clean (convert to lowercase and remove punctuations and   
     #characters and then strip
     text = re.sub(r'[^\w\s]', '', str(text).lower().strip())
@@ -72,7 +72,9 @@ def train_text_tfidf(dataset: data.DMLDataset, max_features: int = 1000, ngram_r
 
     all_texts = []
     all_labels = []
-    for batch in dataset:
+    for i, batch in enumerate(dataset):
+        if i % 10 == 0:
+            print(f'train text: batch {i}')
         all_texts += [preprocess_text(t) for t in batch['text']]
         all_labels.append(batch['label'].detach().cpu().numpy())
     all_labels = np.concatenate(all_labels)
@@ -86,7 +88,9 @@ def encode_text_tfidf(model: feature_extraction.text.TfidfVectorizer,
                       dataset: data.DMLDataset) -> (np.ndarray, np.ndarray):
     all_texts = []
     all_labels = []
-    for batch in dataset:
+    for i, batch in enumerate(dataset):
+        if i % 10 == 0:
+            print(f'encode text: batch {i}')
         all_texts += [preprocess_text(t) for t in batch['text']]
         all_labels.append(batch['label'].detach().cpu().numpy())
     all_labels = np.concatenate(all_labels)
