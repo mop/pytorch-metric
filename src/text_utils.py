@@ -9,7 +9,7 @@ from sklearn.preprocessing import normalize
 import numpy as np
 
 
-def preprocess_text(text: str, stem:bool =False, lemm: bool = False, stopwords: list=None):
+def preprocess_text(text: str, stem:bool = True, lemm: bool = False, stopwords: list = None):
      ## clean (convert to lowercase and remove punctuations and   
     #characters and then strip
     text = re.sub(r'[^\w\s]', '', str(text).lower().strip())
@@ -48,12 +48,14 @@ def train_text_embeddings(dataset: data.DMLDataset, embedding_size: int = 128):
 
     return model
 
-def encode_text(model, dataset: data.DMLDataset) -> (np.ndarray, np.ndarray, list):
+def encode_text(model, dataset: data.DMLDataset, preprocess_args: dict = None) -> (np.ndarray, np.ndarray, list):
     all_texts = []
     all_labels = []
     all_posting_ids = []
+    if preprocess_args is None:
+        preprocess_args = {}
     for batch in dataset:
-        all_texts += [preprocess_text(t) for t in batch['text']]
+        all_texts += [preprocess_text(t, **preprocess_args) for t in batch['text']]
         all_labels.append(batch['label'].detach().cpu().numpy())
         all_posting_ids += batch['posting_id']
     all_labels = np.concatenate(all_labels)
@@ -68,16 +70,17 @@ def encode_text(model, dataset: data.DMLDataset) -> (np.ndarray, np.ndarray, lis
     return all_fvecs, all_labels, all_posting_ids
 
 
-def train_text_tfidf(dataset: data.DMLDataset, max_features: int = 1000, ngram_range=(1, 1)):
-    stopwords = set(nltk.corpus.stopwords.words('english'))
+def train_text_tfidf(dataset: data.DMLDataset, max_features: int = 1000, ngram_range=(1, 1), preprocess_args: dict = None):
     #cv = CountVectorizer(max_df=0.8, stop_words=set(stopwords), max_features=max_features, ngram_range=ngram_range)
 
     all_texts = []
     all_labels = []
+    if preprocess_args is None:
+        preprocess_args = {}
     for i, batch in enumerate(dataset):
         if i % 10 == 0:
             print(f'train text: batch {i}')
-        all_texts += [preprocess_text(t) for t in batch['text']]
+        all_texts += [preprocess_text(t, **preprocess_args) for t in batch['text']]
         all_labels.append(batch['label'].detach().cpu().numpy())
     all_labels = np.concatenate(all_labels)
 
@@ -87,14 +90,17 @@ def train_text_tfidf(dataset: data.DMLDataset, max_features: int = 1000, ngram_r
     return tfidf
 
 def encode_text_tfidf(model: feature_extraction.text.TfidfVectorizer,
-                      dataset: data.DMLDataset) -> (np.ndarray, np.ndarray, list):
+                      dataset: data.DMLDataset,
+                      preprocess_args: dict = None) -> (np.ndarray, np.ndarray, list):
     all_texts = []
     all_labels = []
     all_posting_ids = []
+    if preprocess_args is None:
+        preprocess_args = {}
     for i, batch in enumerate(dataset):
         if i % 10 == 0:
             print(f'encode text: batch {i}')
-        all_texts += [preprocess_text(t) for t in batch['text']]
+        all_texts += [preprocess_text(t, **preprocess_args) for t in batch['text']]
         all_labels.append(batch['label'].detach().cpu().numpy())
         all_posting_ids += batch['posting_id']
     all_labels = np.concatenate(all_labels)
