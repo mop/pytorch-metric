@@ -27,3 +27,15 @@ def get_class_fn(param: dict):
         tmp.update(kwargs)
         return cls(*a, **tmp)
     return apply_it
+
+def update_args(args, config: dict, *, additional_keys: list = None):
+    """
+    Updates the arguments ``args'' obtained from argument parser
+    with the config dictionary.
+    """
+    keys = ['embedding_size', 'batch_size', 'image_size']
+    if additional_keys is not None:
+        keys += list(additional_keys)
+    for k in keys:
+        if getattr(args, k) is None:
+            setattr(args, k, config[k])

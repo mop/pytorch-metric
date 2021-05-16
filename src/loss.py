@@ -44,6 +44,11 @@ class ProxyNCA_prob(torch.nn.Module):
         self.scale = scale
 
     def forward(self, X, T):
+        """
+        Computes the proxy loss. X are features and T are targegts.
+        The targets might be a one dimensional tensor (with the class labels)
+        or a one-hot encoded tensor, representing the class labels.
+        """
         # self.scale is sqrt(1/T)
         P = self.proxies
 
@@ -53,8 +58,12 @@ class ProxyNCA_prob(torch.nn.Module):
         # distance to proxies
         D = pairwise_distance(torch.cat([X, P]), squared=True)[:X.size()[0], X.size()[0]:]
 
-        T = binarize_and_smooth_labels(
-            T=T, num_classes=len(P), smooth_const=0)
+        if len(T.size()) == 1:
+            T = binarize_and_smooth_labels(
+                T=T, num_classes=len(P), smooth_const=0)
+        else:
+            # already one hot encoded
+            pass
 
         loss = torch.sum(-T * F.log_softmax(-D, -1), -1)
         loss = loss.mean()
