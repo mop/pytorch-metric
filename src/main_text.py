@@ -60,7 +60,7 @@ def main():
         logging.info(f'Accuracy {np.mean(preds.ravel() == all_labels.ravel())}')
     else:
         text_model = text_utils.train_text_tfidf(loader)
-        val_embedding, all_labels, _ = text_utils.encode_text_tfidf(text_model, val_loader)
+        val_embedding, all_labels, _ = text_utils.encode_text_tfidf(text_model, val_loader, max_features=None, ngram_range=(1,2), preprocess_args={'stem': False, 'stopwords': []})
         D = pairwise_distances(X=val_embedding, Y=val_embedding) + 1000 * np.eye(val_embedding.shape[0])
         #D = cdist(val_embedding, val_embedding) + 10000 * np.eye(val_embedding.shape[0])
         preds = D.argmin(axis=1)
